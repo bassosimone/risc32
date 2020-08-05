@@ -91,7 +91,7 @@ var (
 // Fetch fetches the next instruction, returns it, and increments
 // the vm.PC program counter of the virtual machine.
 func (vm *VM) Fetch() (uint32, error) {
-	if vm.PC > MemorySize {
+	if vm.PC >= MemorySize {
 		return 0, ErrSIGSEGV
 	}
 	ci := vm.M[vm.PC]
