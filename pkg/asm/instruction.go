@@ -5,6 +5,9 @@ import (
 	"strconv"
 )
 
+// TODO(bassosimone): maybe create package pkg/spec where we can
+// store the constants defining the ISA?
+
 // The following constants define the opcodes. We have 5 bits to define
 // opcodes, so up to 32 opcodes. While the opcodes here are related to
 // the ones of RiSC-16, here we have more opcodes and also their values
