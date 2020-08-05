@@ -40,7 +40,7 @@ func main() {
 			log.Fatal(err)
 		}
 		if *verbose {
-			log.Printf("vm: %s\n", machine)
+			log.Printf("vm: %s", machine)
 			log.Printf("vm: %#032b %s\n", ci, vm.Disassemble(ci))
 		}
 		if *debug {

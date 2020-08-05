@@ -101,7 +101,9 @@ func (vm *VM) Fetch() (uint32, error) {
 
 // String generates a string representation of the VM state.
 func (vm *VM) String() string {
-	return fmt.Sprintf("{PC:%d GPR:%+v}", vm.PC, vm.GPR)
+	s := fmt.Sprintf("{PC:%d GPR:%+v}\n", vm.PC, vm.GPR)
+	s += fmt.Sprintf("    {StackTop: %+v}\n", vm.M[MemorySize-48:])
+	return s
 }
 
 // DecodeOpcode decodes the opcode of an instruction.
