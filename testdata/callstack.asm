@@ -1,3 +1,10 @@
+        movi r1 _init        # prepare to jump to _init
+        jalr r0 r1           # jump there
+        .space 4092          # 4092 + 3 = 4095 -- space for kernel?
+
+_init:  sw r0 r0 0
+        sw r0 r0 1
+        sw r0 r0 2           # clear trampoline (movi is 2 instr + jalr)
         movi r29 1048575     # initialize stack ptr
         movi r1 _main        # get the address of _main
         jalr r31 r1          # call _main
