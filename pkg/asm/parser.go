@@ -27,6 +27,8 @@ var InstructionParsers = map[string]ParseSpecificInstruction{
 	"movi":   ParseMOVI,
 	".fill":  ParseFILL,
 	".space": ParseSPACE,
+	"wsr":    ParseWSR,
+	"rsr":    ParseRSR,
 }
 
 // The following errors may occur when assembling.
@@ -411,6 +413,48 @@ func ParseSPACE(in <-chan LexerToken, label *string, lineno int) (out []Instruct
 		label = nil
 	}
 	return
+}
+
+// ParseWSR parses the WSR instruction
+func ParseWSR(in <-chan LexerToken, label *string, lineno int) []Instruction {
+	ra, err := ParseRegister(in)
+	if err != nil {
+		return NewParseError(err)
+	}
+	imm, err := ParseImmediate(in)
+	if err != nil {
+		return NewParseError(err)
+	}
+	if err := ParseEOL(in); err != nil {
+		return NewParseError(err)
+	}
+	return []Instruction{InstructionWSR{
+		Lineno:     lineno,
+		MaybeLabel: label,
+		RA:         ra,
+		Imm:        imm,
+	}}
+}
+
+// ParseRSR parses the WSR instruction
+func ParseRSR(in <-chan LexerToken, label *string, lineno int) []Instruction {
+	ra, err := ParseRegister(in)
+	if err != nil {
+		return NewParseError(err)
+	}
+	imm, err := ParseImmediate(in)
+	if err != nil {
+		return NewParseError(err)
+	}
+	if err := ParseEOL(in); err != nil {
+		return NewParseError(err)
+	}
+	return []Instruction{InstructionRSR{
+		Lineno:     lineno,
+		MaybeLabel: label,
+		RA:         ra,
+		Imm:        imm,
+	}}
 }
 
 // ParseRegister parses a register.

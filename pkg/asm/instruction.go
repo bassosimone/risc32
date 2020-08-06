@@ -22,6 +22,8 @@ const (
 	OpcodeLW
 	OpcodeBEQ
 	OpcodeJALR
+	OpcodeWSR
+	OpcodeRSR
 )
 
 // Instruction is a parsed instruction.
@@ -482,6 +484,82 @@ func (ia InstructionDATA) Encode(labels map[string]int64, pc uint32) (uint32, er
 }
 
 var _ Instruction = InstructionDATA{}
+
+// InstructionWSR is the WSR instruction
+type InstructionWSR struct {
+	Lineno     int
+	MaybeLabel *string
+	RA         uint32
+	Imm        string
+}
+
+// Err implements Instruction.Err
+func (ia InstructionWSR) Err() error {
+	return nil
+}
+
+// Label implements Instruction.Label
+func (ia InstructionWSR) Label() *string {
+	return ia.MaybeLabel
+}
+
+// Line implements Instruction.Line
+func (ia InstructionWSR) Line() int {
+	return ia.Lineno
+}
+
+// Encode implements Instruction.Encode
+func (ia InstructionWSR) Encode(labels map[string]int64, pc uint32) (uint32, error) {
+	var out uint32
+	out |= (OpcodeWSR & 0b1_1111) << 27
+	out |= (ia.RA & 0b1_1111) << 22
+	imm, err := ResolveImmediate(labels, ia.Imm, 32, ia.Lineno)
+	if err != nil {
+		return 0, err
+	}
+	out |= (imm >> 10)
+	return out, nil
+}
+
+var _ Instruction = InstructionWSR{}
+
+// InstructionRSR is the RSR instruction
+type InstructionRSR struct {
+	Lineno     int
+	MaybeLabel *string
+	RA         uint32
+	Imm        string
+}
+
+// Err implements Instruction.Err
+func (ia InstructionRSR) Err() error {
+	return nil
+}
+
+// Label implements Instruction.Label
+func (ia InstructionRSR) Label() *string {
+	return ia.MaybeLabel
+}
+
+// Line implements Instruction.Line
+func (ia InstructionRSR) Line() int {
+	return ia.Lineno
+}
+
+// Encode implements Instruction.Encode
+func (ia InstructionRSR) Encode(labels map[string]int64, pc uint32) (uint32, error) {
+	var out uint32
+	out |= (OpcodeRSR & 0b1_1111) << 27
+	out |= (ia.RA & 0b1_1111) << 22
+	imm, err := ResolveImmediate(labels, ia.Imm, 32, ia.Lineno)
+	if err != nil {
+		return 0, err
+	}
+	out |= (imm >> 10)
+	return out, nil
+}
+
+var _ Instruction = InstructionRSR{}
 
 // ResolveImmediate resolves the value of an immediate
 func ResolveImmediate(

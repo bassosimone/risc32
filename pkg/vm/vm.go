@@ -33,6 +33,31 @@
 // The comment, if any, will be discarded. The format of the output number
 // MUST be hexadecimal with a leading 0x prefix. It does not necessarily need
 // to have a bunch of leading zeroes, but that would be nice.
+//
+// Instruction set
+//
+// This VM implements all the instructions of the RiSC-16. It also implements:
+//
+// HALT: stops the processor. This was a pseudo-instruction in the RiSC-16
+// and is instead a full fledged instruction here.
+//
+// WSR (Write Status Register - RI format): writes the content of the specified
+// general purpose register RA to the status register indicated by the specified
+// immediate. This operation fails if we are running in user mode.
+//
+// RSR (Read Status Register): like WSR except that it reads a status register.
+//
+// Status Registers
+//
+// The status registers can only be accessed using RSR and WSR. When the
+// UserMode bit is set, accessing status registers causes a fault.
+//
+// The status register with index 0 contains the processor flags. It currently
+// defines the following bit flags:
+//
+//     <Unused: 31><UserMode: 1>
+//
+// Attempting to access a non-existent status register causes a fault.
 package vm
 
 import (
@@ -50,6 +75,8 @@ import (
 // aren't necessarily aligned with the RiSC-16 architecture ones.
 const (
 	OpcodeHALT = uint32(iota) // auto-halt when hitting uninit mem
+
+	// RiSC-16 like operations
 	OpcodeADD
 	OpcodeADDI
 	OpcodeNAND
@@ -58,6 +85,10 @@ const (
 	OpcodeLW
 	OpcodeBEQ
 	OpcodeJALR
+
+	// Extended operations
+	OpcodeWSR
+	OpcodeRSR
 )
 
 const (
@@ -69,20 +100,32 @@ const (
 	// generally used by MIPS for such registers. R0 is always
 	// zero and its value cannot be changed.
 	NumRegisters = 32
+
+	// StatusRegisters is the number of status registers.
+	StatusRegisters = 1
+)
+
+// The following constants define bits in status register 0.
+const (
+	StatusUserMode = (1 << iota)
 )
 
 // VM is a virtual machine instance. The virtual machine is not
 // goroutine safe; a single goroutine should manage it.
 type VM struct {
-	GPR [NumRegisters]uint32 // general purpose registers
-	M   [MemorySize]uint32   // memory
-	PC  uint32               // program counter
+	GPR [NumRegisters]uint32    // general purpose registers
+	M   [MemorySize]uint32      // memory
+	PC  uint32                  // program counter
+	S   [StatusRegisters]uint32 // status registers
 }
 
 // The following errors may be returned.
 var (
 	// ErrHalted indicates that the VM has been halted.
 	ErrHalted = errors.New("vm: halted")
+
+	// ErrNotPermitted indicates that a given operation is not permitted.
+	ErrNotPermitted = errors.New("vm: operation not permitted")
 
 	// ErrSIGSEGV indicates that we accessed an out of bound address.
 	ErrSIGSEGV = errors.New("vm: segmentation fault")
@@ -182,6 +225,22 @@ func (vm *VM) Execute(ci uint32) error {
 	case OpcodeJALR:
 		vm.GPR[ra] = vm.PC
 		vm.PC = vm.GPR[rb]
+	case OpcodeWSR:
+		if (vm.S[0] & StatusUserMode) != 0 {
+			return ErrNotPermitted
+		}
+		if imm22 >= StatusRegisters {
+			return ErrNotPermitted
+		}
+		vm.S[imm22] = vm.GPR[ra]
+	case OpcodeRSR:
+		if (vm.S[0] & StatusUserMode) != 0 {
+			return ErrNotPermitted
+		}
+		if imm22 >= StatusRegisters {
+			return ErrNotPermitted
+		}
+		vm.GPR[ra] = vm.S[imm22]
 	}
 	return nil
 }
@@ -219,6 +278,10 @@ func Disassemble(ci uint32) string {
 		return fmt.Sprintf("beq r%d r%d %d", ra, rb, int32(imm17))
 	case OpcodeJALR:
 		return fmt.Sprintf("jalr r%d r%d", ra, rb)
+	case OpcodeWSR:
+		return fmt.Sprintf("wsr r%d %d", ra, imm22)
+	case OpcodeRSR:
+		return fmt.Sprintf("rsr r%d %d", ra, imm22)
 	default:
 		return fmt.Sprintf("<unknown instruction: %d>", ci)
 	}
