@@ -131,15 +131,23 @@ var (
 	ErrSIGSEGV = errors.New("vm: segmentation fault")
 )
 
+// Memory accesses an address in memory
+func (vm *VM) Memory(off uint32) (*uint32, error) {
+	if off >= MemorySize {
+		return nil, ErrSIGSEGV
+	}
+	return &vm.M[off], nil
+}
+
 // Fetch fetches the next instruction, returns it, and increments
 // the vm.PC program counter of the virtual machine.
 func (vm *VM) Fetch() (uint32, error) {
-	if vm.PC >= MemorySize {
-		return 0, ErrSIGSEGV
+	ci, err := vm.Memory(vm.PC)
+	if err != nil {
+		return 0, err
 	}
-	ci := vm.M[vm.PC]
 	vm.PC++
-	return ci, nil
+	return *ci, nil
 }
 
 // String generates a string representation of the VM state.
@@ -206,18 +214,18 @@ func (vm *VM) Execute(ci uint32) error {
 		vm.GPR[ra] = ^(vm.GPR[rb] & vm.GPR[rc])
 	case OpcodeLUI:
 		vm.GPR[ra] = imm22 << 10
-	case OpcodeSW:
+	case OpcodeSW, OpcodeLW:
 		off := vm.GPR[rb] + imm17
-		if off >= MemorySize {
-			return ErrSIGSEGV
+		mptr, err := vm.Memory(off)
+		if err != nil {
+			return err
 		}
-		vm.M[off] = vm.GPR[ra]
-	case OpcodeLW:
-		off := vm.GPR[rb] + imm17
-		if off >= MemorySize {
-			return ErrSIGSEGV
+		switch opcode {
+		case OpcodeSW:
+			*mptr = vm.GPR[ra]
+		case OpcodeLW:
+			vm.GPR[ra] = *mptr
 		}
-		vm.GPR[ra] = vm.M[off]
 	case OpcodeBEQ:
 		if vm.GPR[ra] == vm.GPR[rb] {
 			vm.PC += imm17
@@ -225,22 +233,19 @@ func (vm *VM) Execute(ci uint32) error {
 	case OpcodeJALR:
 		vm.GPR[ra] = vm.PC
 		vm.PC = vm.GPR[rb]
-	case OpcodeWSR:
+	case OpcodeWSR, OpcodeRSR:
 		if (vm.S[0] & StatusUserMode) != 0 {
 			return ErrNotPermitted
 		}
 		if imm22 >= StatusRegisters {
 			return ErrNotPermitted
 		}
-		vm.S[imm22] = vm.GPR[ra]
-	case OpcodeRSR:
-		if (vm.S[0] & StatusUserMode) != 0 {
-			return ErrNotPermitted
+		switch opcode {
+		case OpcodeWSR:
+			vm.S[imm22] = vm.GPR[ra]
+		case OpcodeRSR:
+			vm.GPR[ra] = vm.S[imm22]
 		}
-		if imm22 >= StatusRegisters {
-			return ErrNotPermitted
-		}
-		vm.GPR[ra] = vm.S[imm22]
 	}
 	return nil
 }
