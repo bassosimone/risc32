@@ -513,11 +513,11 @@ func (ia InstructionWSR) Encode(labels map[string]int64, pc uint32) (uint32, err
 	var out uint32
 	out |= (OpcodeWSR & 0b1_1111) << 27
 	out |= (ia.RA & 0b1_1111) << 22
-	imm, err := ResolveImmediate(labels, ia.Imm, 32, ia.Lineno)
+	imm, err := ResolveImmediate(labels, ia.Imm, 22, ia.Lineno)
 	if err != nil {
 		return 0, err
 	}
-	out |= (imm >> 10)
+	out |= imm & 0b11_1111_1111_1111_1111
 	return out, nil
 }
 
@@ -551,11 +551,11 @@ func (ia InstructionRSR) Encode(labels map[string]int64, pc uint32) (uint32, err
 	var out uint32
 	out |= (OpcodeRSR & 0b1_1111) << 27
 	out |= (ia.RA & 0b1_1111) << 22
-	imm, err := ResolveImmediate(labels, ia.Imm, 32, ia.Lineno)
+	imm, err := ResolveImmediate(labels, ia.Imm, 22, ia.Lineno)
 	if err != nil {
 		return 0, err
 	}
-	out |= (imm >> 10)
+	out |= imm & 0b11_1111_1111_1111_1111
 	return out, nil
 }
 
