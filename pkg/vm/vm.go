@@ -55,9 +55,45 @@
 // The status register with index 0 contains the processor flags. It currently
 // defines the following bit flags:
 //
-//     <Unused: 31><UserMode: 1>
+//     <Unused: 30><Paging: 1><UserMode: 1>
+//
+// Paging indicates whether paging is enabled. UserMode indicates whether
+// we are running in user mode of in kernel mode.
+//
+// The status register with index 1 contains the address in memory of the
+// page table. The page table contains 1,024 32-bit entries. We use the page
+// table only when the Paging flag is set.
 //
 // Attempting to access a non-existent status register causes a fault.
+//
+// Page table
+//
+// Each entry in the page table takes 32 bits. We have 1,024 entries in
+// total inside of the page table. The kernel must allocate the page table
+// in a specific place and make sure it is protected, if needed.
+//
+// When paging is enabled, addresses are virtual addresses as follows:
+//
+//     <PageID: 22><Address: 10>
+//
+// Status register 1 contains the address the page table. By adding the PageID
+// offset to such address, we fetch the corresponding entry.
+//
+// The entry itself is as follows:
+//
+//     <BaseAddr: 22><Flags: 10>
+//
+// The BaseAddr contains the base address of the corresponding page. The flags
+// apply the following restrictions to the page:
+//
+// - `X` (1<<0): true if the page contains executable code
+// - `W` (1<<1): true if the page is writeable
+// - `R` (1<<2): true if the page is readable
+//
+// When the code accesses a user page without the proper restrictions, the
+// processor will emit a fault and possibly terminate.
+//
+// A zeroed entry in the page table always causes a fault.
 package vm
 
 import (
@@ -102,12 +138,20 @@ const (
 	NumRegisters = 32
 
 	// StatusRegisters is the number of status registers.
-	StatusRegisters = 1
+	StatusRegisters = 2
 )
 
 // The following constants define bits in status register 0.
 const (
 	StatusUserMode = (1 << iota)
+	StatusPaging
+)
+
+// The following constants define memory flags.
+const (
+	MemoryExec = (1 << iota)
+	MemoryWrite
+	MemoryRead
 )
 
 // VM is a virtual machine instance. The virtual machine is not
@@ -132,7 +176,26 @@ var (
 )
 
 // Memory accesses an address in memory
-func (vm *VM) Memory(off uint32) (*uint32, error) {
+func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
+	if (vm.S[0] & StatusPaging) != 0 {
+		if (vm.S[1] & 0b11_1111_1111) != 0 {
+			return nil, fmt.Errorf("%w: invalid page table base address", ErrSIGSEGV)
+		}
+		pageid := off >> 10
+		pageoff := vm.S[1] + pageid
+		if pageoff >= MemorySize {
+			return nil, fmt.Errorf("%w: page entry above physical memory", ErrSIGSEGV)
+		}
+		pageinfo := vm.M[pageoff]
+		pageflags := pageinfo & 0b111_1111
+		if (pageflags & flags) != flags {
+			return nil, fmt.Errorf("%w: memory flags mismatch", ErrNotPermitted)
+		}
+		membase := pageinfo & 0b1111_1111_1111_1111_1111_11_00_0000_0000
+		memoff := off & 0b0000_0000_0000_0000_0000_00_11_1111_1111
+		off = membase + memoff
+		// fallthrough
+	}
 	if off >= MemorySize {
 		return nil, ErrSIGSEGV
 	}
@@ -142,7 +205,7 @@ func (vm *VM) Memory(off uint32) (*uint32, error) {
 // Fetch fetches the next instruction, returns it, and increments
 // the vm.PC program counter of the virtual machine.
 func (vm *VM) Fetch() (uint32, error) {
-	ci, err := vm.Memory(vm.PC)
+	ci, err := vm.Memory(vm.PC, MemoryRead|MemoryExec)
 	if err != nil {
 		return 0, err
 	}
@@ -152,7 +215,7 @@ func (vm *VM) Fetch() (uint32, error) {
 
 // String generates a string representation of the VM state.
 func (vm *VM) String() string {
-	s := fmt.Sprintf("{PC:%d GPR:%+v}\n", vm.PC, vm.GPR)
+	s := fmt.Sprintf("{PC:%d GPR:%+v S:%+v}\n", vm.PC, vm.GPR, vm.S)
 	s += fmt.Sprintf("    {StackTop: %+v}\n", vm.M[MemorySize-48:])
 	return s
 }
@@ -216,7 +279,14 @@ func (vm *VM) Execute(ci uint32) error {
 		vm.GPR[ra] = imm22 << 10
 	case OpcodeSW, OpcodeLW:
 		off := vm.GPR[rb] + imm17
-		mptr, err := vm.Memory(off)
+		var flags uint32
+		switch opcode {
+		case OpcodeSW:
+			flags |= MemoryWrite
+		case OpcodeLW:
+			flags |= MemoryRead
+		}
+		mptr, err := vm.Memory(off, flags)
 		if err != nil {
 			return err
 		}
