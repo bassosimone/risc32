@@ -126,6 +126,18 @@
 // 16 interrupts. Any value of the interrupt not between 0 and 15 (inclusive)
 // is mapped to zero. The default action of interrupt zero should be to stop
 // the machine but some operations may be performed before that.
+//
+// The following IRQs are defined:
+//
+// - IrqHALT (0): asks the OS to halt
+// - IrqClock (1): the clock needs attention
+//
+// Clock
+//
+// The clock uses the following memory location:
+//
+// ClockFrequency (1<<17|0): this is the number of milliseconds after
+// which you want the clock to generate an interrupt.
 package vm
 
 import (
@@ -133,8 +145,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The following constants define the opcodes. We have 5 bits to define
@@ -188,10 +202,23 @@ const (
 	MemoryRead
 )
 
+// The following constants define interrupt requests.
+const (
+	IrqHALT = iota
+	IrqClock
+)
+
+// The following constants define memory mapped addresses.
+const (
+	ClockFrequency = 1<<17 | iota
+)
+
 // VM is a virtual machine instance. The virtual machine is not
 // goroutine safe; a single goroutine should manage it.
 type VM struct {
+	CF  uint32                     // clock frequency
 	GPR [NumRegisters]uint32       // general purpose registers
+	LTR time.Time                  // last time record
 	M   [MemorySize]uint32         // memory
 	PC  uint32                     // program counter
 	S   [NumStatusRegisters]uint32 // status registers
@@ -232,6 +259,11 @@ func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
 	}
 	if off >= MemorySize {
 		return nil, ErrSIGSEGV
+	}
+	// Implement memory mapped I/O
+	switch off {
+	case ClockFrequency:
+		return &vm.CF, nil
 	}
 	return &vm.M[off], nil
 }
@@ -290,6 +322,55 @@ func Decode(ci uint32) (opcode, ra, rb, rc, imm17, imm22 uint32) {
 		DecodeImm17(ci), DecodeImm22(ci)
 }
 
+// Interrupt executes an interrupt service routine.
+func (vm *VM) Interrupt(code uint32) error {
+	log.Printf("vm: irq %d", code)
+	if (vm.S[2] & 0b11_1111_1111) != 0 {
+		return fmt.Errorf("%w: invalid interrupt table base address", ErrSIGSEGV)
+	}
+	if (vm.S[3] & 0b11_1111_1111) != 0 {
+		return fmt.Errorf("%w: invalid interrupt stack base address", ErrSIGSEGV)
+	}
+	if code >= 16 {
+		code = IrqHALT // the zero handler tells the kernel to HALT
+	}
+	// save state and next PC - those registers are typically
+	// reserved for kernel operations in MIPS
+	vm.GPR[26] = vm.S[0]
+	vm.GPR[27] = vm.PC
+	// swap the kernel stack and the current user stack
+	vm.S[3], vm.GPR[29] = vm.GPR[29], vm.S[3]
+	// enter kernel mode with interrupt handling and paging disabled
+	vm.S[0] &^= StatusUserMode | StatusInterrupts | StatusPaging
+	// jump to ISR
+	off := vm.S[2] + code
+	if off >= MemorySize {
+		return ErrSIGSEGV
+	}
+	vm.PC = vm.M[off]
+	return nil
+}
+
+// MaybeInterrupt checks whether there is any hardware that has
+// pending interrupts and services the highest priority one.
+func (vm *VM) MaybeInterrupt() error {
+	if (vm.S[0] & StatusInterrupts) == 0 {
+		return nil
+	}
+	// Clock
+	if vm.CF > 0 {
+		now := time.Now()
+		if vm.LTR.IsZero() {
+			vm.LTR = now
+		}
+		if now.Sub(vm.LTR).Milliseconds() >= int64(vm.CF) {
+			vm.LTR = now
+			return vm.Interrupt(IrqClock)
+		}
+	}
+	return nil
+}
+
 // Execute executes the current instruction ci. This function returns an
 // error when the processor has halted or a fault has occurred.
 func (vm *VM) Execute(ci uint32) error {
@@ -307,34 +388,11 @@ func (vm *VM) Execute(ci uint32) error {
 		if ra != 0 || rb != 0 {
 			vm.GPR[ra] = vm.PC
 			vm.PC = vm.GPR[rb]
-			return nil
-		}
-		if (vm.S[0] & StatusInterrupts) == 0 {
+		} else if (vm.S[0] & StatusInterrupts) == 0 {
 			return ErrHalted
+		} else if err := vm.Interrupt(imm17); err != nil {
+			return err
 		}
-		if (vm.S[2] & 0b11_1111_1111) != 0 {
-			return fmt.Errorf("%w: invalid interrupt table base address", ErrSIGSEGV)
-		}
-		if (vm.S[3] & 0b11_1111_1111) != 0 {
-			return fmt.Errorf("%w: invalid interrupt stack base address", ErrSIGSEGV)
-		}
-		if imm17 < 0 || imm17 >= 16 {
-			imm17 = 0 // the first handler tells the kernel to HALT
-		}
-		// save state and next PC - those registers are typically
-		// reserved for kernel operations in MIPS
-		vm.GPR[26] = vm.S[0]
-		vm.GPR[27] = vm.PC
-		// swap the kernel stack and the current user stack
-		vm.S[3], vm.GPR[29] = vm.GPR[29], vm.S[3]
-		// enter kernel mode with interrupt handling and paging disabled
-		vm.S[0] &^= StatusUserMode | StatusInterrupts | StatusPaging
-		// jump to ISR
-		off := vm.S[2] + imm17
-		if off >= MemorySize {
-			return ErrSIGSEGV
-		}
-		vm.PC = vm.M[off]
 	case OpcodeADD:
 		vm.GPR[ra] = vm.GPR[rb] + vm.GPR[rc]
 	case OpcodeADDI:
@@ -380,7 +438,9 @@ func (vm *VM) Execute(ci uint32) error {
 			vm.GPR[ra] = vm.S[imm22]
 		}
 	}
-	return nil
+	// After the execution of each instruction, check whether we have
+	// any other pending interrupt and service them.
+	return vm.MaybeInterrupt()
 }
 
 // SignExtend17 extends the sign to negative values over 17 bit.
