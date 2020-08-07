@@ -291,7 +291,6 @@ func (vm *VM) Fetch() (uint32, error) {
 // String generates a string representation of the VM state.
 func (vm *VM) String() string {
 	s := fmt.Sprintf("{PC:%d GPR:%+v S:%+v}\n", vm.PC, vm.GPR, vm.S)
-	s += fmt.Sprintf("    {StackTop: %+v}\n", vm.M[MemorySize-48:])
 	return s
 }
 
