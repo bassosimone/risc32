@@ -29,6 +29,7 @@ var InstructionParsers = map[string]ParseSpecificInstruction{
 	".space": ParseSPACE,
 	"wsr":    ParseWSR,
 	"rsr":    ParseRSR,
+	"trap":   ParseTRAP,
 }
 
 // The following errors may occur when assembling.
@@ -311,13 +312,13 @@ func ParseNOP(in <-chan LexerToken, label *string, lineno int) []Instruction {
 	return []Instruction{InstructionADD{Lineno: lineno, MaybeLabel: label}}
 }
 
-// ParseHALT parses the HALT instruction
+// ParseHALT parses the HALT pseudo-instruction
 func ParseHALT(in <-chan LexerToken, label *string, lineno int) []Instruction {
 	if err := ParseEOL(in); err != nil {
 		return NewParseError(err)
 	}
-	// HALT is mapped to JALR r0 r0 <special-value>.
-	return []Instruction{InstructionHALT{
+	// HALT is mapped to JALR 0 0 0
+	return []Instruction{InstructionJALR{
 		Lineno:     lineno,
 		MaybeLabel: label,
 	}}
@@ -453,6 +454,22 @@ func ParseRSR(in <-chan LexerToken, label *string, lineno int) []Instruction {
 		Lineno:     lineno,
 		MaybeLabel: label,
 		RA:         ra,
+		Imm:        imm,
+	}}
+}
+
+// ParseTRAP parses the TRAP pseudo-instruction
+func ParseTRAP(in <-chan LexerToken, label *string, lineno int) []Instruction {
+	imm, err := ParseImmediate(in)
+	if err != nil {
+		return NewParseError(err)
+	}
+	if err := ParseEOL(in); err != nil {
+		return NewParseError(err)
+	}
+	return []Instruction{InstructionJALR{
+		Lineno:     lineno,
+		MaybeLabel: label,
 		Imm:        imm,
 	}}
 }

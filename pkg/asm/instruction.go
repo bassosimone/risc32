@@ -13,7 +13,7 @@ import (
 // the ones of RiSC-16, here we have more opcodes and also their values
 // aren't necessarily aligned with the RiSC-16 architecture ones.
 const (
-	OpcodeHALT = uint32(iota) // auto-halt when hitting uninit mem
+	OpcodeJALR = uint32(iota) // auto-halt when hitting uninit mem
 	OpcodeADD
 	OpcodeADDI
 	OpcodeNAND
@@ -21,7 +21,6 @@ const (
 	OpcodeSW
 	OpcodeLW
 	OpcodeBEQ
-	OpcodeJALR
 	OpcodeWSR
 	OpcodeRSR
 )
@@ -359,6 +358,7 @@ type InstructionJALR struct {
 	MaybeLabel *string
 	RA         uint32
 	RB         uint32
+	Imm        string
 }
 
 // Err implements Instruction.Err
@@ -382,40 +382,18 @@ func (ia InstructionJALR) Encode(labels map[string]int64, pc uint32) (uint32, er
 	out |= (OpcodeJALR & 0b1_1111) << 27
 	out |= (ia.RA & 0b1_1111) << 22
 	out |= (ia.RB & 0b1_1111) << 17
+	// note that Imm is empty when we're doing HALT
+	if ia.Imm != "" {
+		imm, err := ResolveImmediate(labels, ia.Imm, 17, ia.Lineno)
+		if err != nil {
+			return 0, err
+		}
+		out |= imm & 0b1_1111_1111_1111_1111
+	}
 	return out, nil
 }
 
 var _ Instruction = InstructionJALR{}
-
-// InstructionHALT is the HALT instruction
-type InstructionHALT struct {
-	Lineno     int
-	MaybeLabel *string
-}
-
-// Err implements Instruction.Err
-func (ia InstructionHALT) Err() error {
-	return nil
-}
-
-// Label implements Instruction.Label
-func (ia InstructionHALT) Label() *string {
-	return ia.MaybeLabel
-}
-
-// Line implements Instruction.Line
-func (ia InstructionHALT) Line() int {
-	return ia.Lineno
-}
-
-// Encode implements Instruction.Encode
-func (ia InstructionHALT) Encode(labels map[string]int64, pc uint32) (uint32, error) {
-	var out uint32
-	out |= (OpcodeHALT & 0b1_1111) << 27
-	return out, nil
-}
-
-var _ Instruction = InstructionHALT{}
 
 // InstructionLLI is the LLI pseudo-instruction
 type InstructionLLI struct {

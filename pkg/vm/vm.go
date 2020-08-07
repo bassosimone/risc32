@@ -36,10 +36,8 @@
 //
 // Instruction set
 //
-// This VM implements all the instructions of the RiSC-16. It also implements:
-//
-// HALT: stops the processor. This was a pseudo-instruction in the RiSC-16
-// and is instead a full fledged instruction here.
+// This VM implements all the instructions of the RiSC-16. Like in the RiSC-16,
+// JALR is used for halting and traps. We additionally implement:
 //
 // WSR (Write Status Register - RI format): writes the content of the specified
 // general purpose register RA to the status register indicated by the specified
@@ -55,14 +53,27 @@
 // The status register with index 0 contains the processor flags. It currently
 // defines the following bit flags:
 //
-//     <Unused: 30><Paging: 1><UserMode: 1>
+//     <Unused: 29><Flags: 3>
 //
-// Paging indicates whether paging is enabled. UserMode indicates whether
-// we are running in user mode of in kernel mode.
+// The following flags are defined:
+//
+// - UserMode (1<<0): set when we're in user mode
+// - Paging (1<<1): whether paging is ON
+// - Interrupts (1<<2): whether interrupts are ON
 //
 // The status register with index 1 contains the address in memory of the
 // page table. The page table contains 1,024 32-bit entries. We use the page
-// table only when the Paging flag is set.
+// table only when the Paging flag is set. The page table must be aligned
+// to a 1<<10 boundary, otherwise the machine halts.
+//
+// The status register with index 2 contains the address in memory of the
+// interrupt handlers vector. This table contains 16 32-bit entries. We only
+// use this table when the Interrupts flag is set. Also the interrupt table
+// must be aligned to a 1<<10 boundary, otherwise the machine halts.
+//
+// The status register with index 3 contains the address in memory of the
+// stack that should be used by interrupts. This value must be 1<<10 aligned
+// like the page table and the interrupt handlers vector.
 //
 // Attempting to access a non-existent status register causes a fault.
 //
@@ -94,6 +105,27 @@
 // processor will emit a fault and possibly terminate.
 //
 // A zeroed entry in the page table always causes a fault.
+//
+// Interrupts
+//
+// We have 32-bit 16 handlers. Each handler is the address of the handler
+// routine to jump to. The hardware saves the status register in r26 and the
+// next program counter in r27. It also swaps the current content of r29
+// with the value of status register 3. Finally, it clears UserMode, Interrupts,
+// and Paging, and transfers the control to the specified routine.
+//
+// Because the interrupt service routine runs with interrupts disabled, you
+// are not supposed to receive more interrupts until done. Because it runs with
+// paging disabled, when you install the interrupt service routine, you must
+// make sure that you install an absolute memory address. This is done to ensure
+// you must jump to the service routine even if paging is such that you'd not
+// otherwise be able to jump to the routine address.
+//
+// The interrupt ID is indicated by the immediate and it is used to choose
+// the proper handler in the table indicated by status register 2. We handle
+// 16 interrupts. Any value of the interrupt not between 0 and 15 (inclusive)
+// is mapped to zero. The default action of interrupt zero should be to stop
+// the machine but some operations may be performed before that.
 package vm
 
 import (
@@ -110,9 +142,11 @@ import (
 // the ones of RiSC-16, here we have more opcodes and also their values
 // aren't necessarily aligned with the RiSC-16 architecture ones.
 const (
-	OpcodeHALT = uint32(iota) // auto-halt when hitting uninit mem
+	// RiSC-16 like operations -- note that JALR is the first operation
+	// so that zero initialized memory stops the VM when we are not using
+	// interrupts, which is a quite handy feature.
+	OpcodeJALR = uint32(iota)
 
-	// RiSC-16 like operations
 	OpcodeADD
 	OpcodeADDI
 	OpcodeNAND
@@ -120,7 +154,6 @@ const (
 	OpcodeSW
 	OpcodeLW
 	OpcodeBEQ
-	OpcodeJALR
 
 	// Extended operations
 	OpcodeWSR
@@ -137,14 +170,15 @@ const (
 	// zero and its value cannot be changed.
 	NumRegisters = 32
 
-	// StatusRegisters is the number of status registers.
-	StatusRegisters = 2
+	// NumStatusRegisters is the number of status registers.
+	NumStatusRegisters = 4
 )
 
 // The following constants define bits in status register 0.
 const (
 	StatusUserMode = (1 << iota)
 	StatusPaging
+	StatusInterrupts
 )
 
 // The following constants define memory flags.
@@ -157,10 +191,10 @@ const (
 // VM is a virtual machine instance. The virtual machine is not
 // goroutine safe; a single goroutine should manage it.
 type VM struct {
-	GPR [NumRegisters]uint32    // general purpose registers
-	M   [MemorySize]uint32      // memory
-	PC  uint32                  // program counter
-	S   [StatusRegisters]uint32 // status registers
+	GPR [NumRegisters]uint32       // general purpose registers
+	M   [MemorySize]uint32         // memory
+	PC  uint32                     // program counter
+	S   [NumStatusRegisters]uint32 // status registers
 }
 
 // The following errors may be returned.
@@ -267,8 +301,40 @@ func (vm *VM) Execute(ci uint32) error {
 	}()
 	// execute instruction
 	switch opcode {
-	case OpcodeHALT:
-		return ErrHalted
+	case OpcodeJALR:
+		// like in RiSC-16 there is no trap when either register
+		// is different from zero, just a normal JALR.
+		if ra != 0 || rb != 0 {
+			vm.GPR[ra] = vm.PC
+			vm.PC = vm.GPR[rb]
+			return nil
+		}
+		if (vm.S[0] & StatusInterrupts) == 0 {
+			return ErrHalted
+		}
+		if (vm.S[2] & 0b11_1111_1111) != 0 {
+			return fmt.Errorf("%w: invalid interrupt table base address", ErrSIGSEGV)
+		}
+		if (vm.S[3] & 0b11_1111_1111) != 0 {
+			return fmt.Errorf("%w: invalid interrupt stack base address", ErrSIGSEGV)
+		}
+		if imm17 < 0 || imm17 >= 16 {
+			imm17 = 0 // the first handler tells the kernel to HALT
+		}
+		// save state and next PC - those registers are typically
+		// reserved for kernel operations in MIPS
+		vm.GPR[26] = vm.S[0]
+		vm.GPR[27] = vm.PC
+		// swap the kernel stack and the current user stack
+		vm.S[3], vm.GPR[29] = vm.GPR[29], vm.S[3]
+		// enter kernel mode with interrupt handling and paging disabled
+		vm.S[0] &^= StatusUserMode | StatusInterrupts | StatusPaging
+		// jump to ISR
+		off := vm.S[2] + imm17
+		if off >= MemorySize {
+			return ErrSIGSEGV
+		}
+		vm.PC = vm.M[off]
 	case OpcodeADD:
 		vm.GPR[ra] = vm.GPR[rb] + vm.GPR[rc]
 	case OpcodeADDI:
@@ -300,14 +366,11 @@ func (vm *VM) Execute(ci uint32) error {
 		if vm.GPR[ra] == vm.GPR[rb] {
 			vm.PC += imm17
 		}
-	case OpcodeJALR:
-		vm.GPR[ra] = vm.PC
-		vm.PC = vm.GPR[rb]
 	case OpcodeWSR, OpcodeRSR:
 		if (vm.S[0] & StatusUserMode) != 0 {
 			return ErrNotPermitted
 		}
-		if imm22 >= StatusRegisters {
+		if imm22 >= NumStatusRegisters {
 			return ErrNotPermitted
 		}
 		switch opcode {
@@ -335,8 +398,6 @@ func Disassemble(ci uint32) string {
 	opcode, ra, rb, rc, imm17, imm22 := Decode(ci)
 	// disassemble instruction
 	switch opcode {
-	case OpcodeHALT:
-		return fmt.Sprintf("halt")
 	case OpcodeADD:
 		return fmt.Sprintf("add r%d r%d r%d", ra, rb, rc)
 	case OpcodeADDI:
@@ -352,7 +413,7 @@ func Disassemble(ci uint32) string {
 	case OpcodeBEQ:
 		return fmt.Sprintf("beq r%d r%d %d", ra, rb, int32(imm17))
 	case OpcodeJALR:
-		return fmt.Sprintf("jalr r%d r%d", ra, rb)
+		return fmt.Sprintf("jalr r%d r%d %d", ra, rb, int32(imm17))
 	case OpcodeWSR:
 		return fmt.Sprintf("wsr r%d %d", ra, imm22)
 	case OpcodeRSR:
