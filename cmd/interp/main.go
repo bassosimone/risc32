@@ -39,11 +39,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if *verbose {
+		if *verbose || (machine.StatusDebug()&vm.StatusDebugTracing) != 0 {
 			log.Printf("vm: %s", machine)
 			log.Printf("vm: %#032b %s\n", ci, vm.Disassemble(ci))
 		}
-		if *debug {
+		if *debug || (machine.StatusDebug()&vm.StatusDebugStepping) != 0 {
 			log.Printf("vm: paused...")
 			fmt.Scanln()
 		}

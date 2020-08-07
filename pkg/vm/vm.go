@@ -60,6 +60,8 @@
 // - UserMode (1<<0): set when we're in user mode
 // - Paging (1<<1): whether paging is ON
 // - Interrupts (1<<2): whether interrupts are ON
+// - DebugStepping (1<<3): turns on stepping
+// - DebugTracing (1<<4): turns on tracing
 //
 // The status register with index 1 contains the address in memory of the
 // page table. The page table contains 1,024 32-bit entries. We use the page
@@ -193,6 +195,8 @@ const (
 	StatusUserMode = (1 << iota)
 	StatusPaging
 	StatusInterrupts
+	StatusDebugStepping
+	StatusDebugTracing
 )
 
 // The following constants define memory flags.
@@ -235,6 +239,11 @@ var (
 	// ErrSIGSEGV indicates that we accessed an out of bound address.
 	ErrSIGSEGV = errors.New("vm: segmentation fault")
 )
+
+// StatusDebug returns the stepping and/or tracing flags.
+func (vm *VM) StatusDebug() uint32 {
+	return vm.S[0] & (StatusDebugTracing | StatusDebugStepping)
+}
 
 // Memory accesses an address in memory
 func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
