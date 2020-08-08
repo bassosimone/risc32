@@ -15,15 +15,24 @@ func main() {
 	log.SetFlags(0)
 	debug := flag.Bool("d", false, "enable debugging")
 	filename := flag.String("f", "", "file to run")
+	tty := flag.Bool("tty", false, "enable tty")
 	verbose := flag.Bool("v", false, "be verbose")
 	flag.Parse()
 	if *filename == "" {
-		log.Fatal("usage: interp [-d] [-v] -f <assembly-code-file>")
+		log.Fatal("usage: interp [-d] [-tty] [-v] -f <assembly-code-file>")
 	}
 	machine := new(vm.VM)
 	fp, err := os.Open(*filename)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *tty {
+		stty, err := vm.TTYAcceptConn()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer stty.Close()
+		machine.TTY = stty
 	}
 	defer fp.Close()
 	var addr uint32

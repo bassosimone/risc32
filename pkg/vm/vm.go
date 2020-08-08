@@ -132,13 +132,47 @@
 //
 // - IrqHALT (0): asks the OS to halt
 // - IrqClock (1): the clock needs attention
+// - IrqTTY (2): the TTY needs attention
+//
+// The IRET instruction implements returning from the interrupt.
+//
+// Memory mapped I/O
+//
+// There is a bunch of memory locations reserved to memory mapped I/O (MMIO).
 //
 // Clock
 //
-// The clock uses the following memory location:
+// The clock uses the following MMIO locations:
 //
-// ClockFrequency (1<<17|0): this is the number of milliseconds after
+// - MMClockFrequency (1<<17|0): this is the number of milliseconds after
 // which you want the clock to generate an interrupt.
+//
+// TTY
+//
+// By default there is no attached TTY. If you attach a TTY before booting
+// the machine and enable interrupts, you will need to service them.
+//
+// When there is an attached TTY, the following locations in memory will
+// become useful for MMIO:
+//
+// - MMTTYStatus (1<<17|1): read the status of the TTY
+// - MMTTYIn (1<<17|2): input from the TTY
+// - MMTTYOut (1<<17|3): output for the TTY
+//
+// The MMTTYStatus word contains the status. The following bits matter:
+//
+// - TTYIn (1<<0): MMTTYIn contains a valid character
+// - TTYOut (1<<1): MMTTYOut contains a valid character
+//
+// The MTTYIn word contains the next incoming char in the lowest byte of the
+// word. A new incoming character causes an IrqTTY interrupt and the TTYIn bit
+// will be set inside the MMTTYStatus word. The interrupt handler must read
+// the character, dispatch it, and clear the TTYIn bit.
+//
+// The MTTYOut word contains the next outgoing char in the lowest byte of the
+// word. The kernel should write into such word only if the TTYOut bit isn't
+// set. Then it should set the bit so that the hardware delivers the char. When
+// the delivery is complete, the hardware will clear TTYOut.
 package vm
 
 import (
@@ -210,12 +244,24 @@ const (
 const (
 	IrqHALT = iota
 	IrqClock
+	IrqTTY
 )
 
 // The following constants define memory mapped addresses.
 const (
 	MMClockFrequency = 1<<17 | iota
+	MMTTYStatus
+	MMTTYIn
+	MMTTYOut
 )
+
+// TTY is any teletype attached to the VM.
+type TTY interface {
+	InterruptPending() (bool, error)
+	StatusRegister() (*uint32, error)
+	InRegister() (*uint32, error)
+	OutRegister() (*uint32, error)
+}
 
 // VM is a virtual machine instance. The virtual machine is not
 // goroutine safe; a single goroutine should manage it.
@@ -229,6 +275,7 @@ type VM struct {
 	M   [MemorySize]uint32         // memory
 	PC  uint32                     // program counter
 	S   [NumStatusRegisters]uint32 // status registers
+	TTY TTY                        // terminal
 }
 
 // The following errors may be returned.
@@ -250,6 +297,21 @@ func (vm *VM) StatusDebug() uint32 {
 
 // Memory accesses an address in memory
 func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
+	// Implement memory mapped I/O
+	switch off {
+	case MMClockFrequency:
+		return &vm.CF, nil
+	}
+	if vm.TTY != nil {
+		switch off {
+		case MMTTYStatus:
+			return vm.TTY.StatusRegister()
+		case MMTTYIn:
+			return vm.TTY.InRegister()
+		case MMTTYOut:
+			return vm.TTY.OutRegister()
+		}
+	}
 	if (vm.S[0] & StatusPaging) != 0 {
 		if (vm.S[1] & 0b11_1111_1111) != 0 {
 			return nil, fmt.Errorf("%w: invalid page table base address", ErrSIGSEGV)
@@ -271,11 +333,6 @@ func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
 	}
 	if off >= MemorySize {
 		return nil, ErrSIGSEGV
-	}
-	// Implement memory mapped I/O
-	switch off {
-	case MMClockFrequency:
-		return &vm.CF, nil
 	}
 	return &vm.M[off], nil
 }
@@ -378,6 +435,18 @@ func (vm *VM) MaybeInterrupt() error {
 			vm.LTR = now
 			return vm.Interrupt(IrqClock)
 		}
+		// fallthrough
+	}
+	// TTY
+	if vm.TTY != nil {
+		ok, err := vm.TTY.InterruptPending()
+		if err != nil {
+			return err
+		}
+		if ok {
+			return vm.Interrupt(IrqTTY)
+		}
+		// fallthrough
 	}
 	return nil
 }
