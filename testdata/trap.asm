@@ -34,10 +34,6 @@ _boot:      nop
 
             .space 1234
 
-__irq0:     nop                  # "handle" the interrupt
-            trap 0               # this causes a halt
+__irq0:     trap 0               # this causes a halt
 
-__irq1:     nop                  # "handle" the interrupt
-            rsr r29 3            # restore userspace stack
-            wsr r26 0            # reset state
-            jalr r0 r27          # return from interrupt
+__irq1:     iret                 # return from interrupt

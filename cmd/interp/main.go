@@ -42,6 +42,8 @@ func main() {
 		if *verbose || (machine.StatusDebug()&vm.StatusDebugTracing) != 0 {
 			log.Printf("vm: %s", machine)
 			log.Printf("vm: %#032b %s\n", ci, vm.Disassemble(ci))
+			log.Printf("vm: S[3]: %d", machine.S[3])
+			log.Printf("vm: stack (r29): %d", machine.GPR[29])
 		}
 		if *debug || (machine.StatusDebug()&vm.StatusDebugStepping) != 0 {
 			log.Printf("vm: paused...")

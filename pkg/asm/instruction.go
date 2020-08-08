@@ -23,6 +23,7 @@ const (
 	OpcodeBEQ
 	OpcodeWSR
 	OpcodeRSR
+	OpcodeIRET
 )
 
 // Instruction is a parsed instruction.
@@ -538,6 +539,36 @@ func (ia InstructionRSR) Encode(labels map[string]int64, pc uint32) (uint32, err
 }
 
 var _ Instruction = InstructionRSR{}
+
+// InstructionIRET is the IRET instruction
+type InstructionIRET struct {
+	Lineno     int
+	MaybeLabel *string
+}
+
+// Err implements Instruction.Err
+func (ia InstructionIRET) Err() error {
+	return nil
+}
+
+// Label implements Instruction.Label
+func (ia InstructionIRET) Label() *string {
+	return ia.MaybeLabel
+}
+
+// Line implements Instruction.Line
+func (ia InstructionIRET) Line() int {
+	return ia.Lineno
+}
+
+// Encode implements Instruction.Encode
+func (ia InstructionIRET) Encode(labels map[string]int64, pc uint32) (uint32, error) {
+	var out uint32
+	out |= (OpcodeIRET & 0b1_1111) << 27
+	return out, nil
+}
+
+var _ Instruction = InstructionIRET{}
 
 // ResolveImmediate resolves the value of an immediate
 func ResolveImmediate(

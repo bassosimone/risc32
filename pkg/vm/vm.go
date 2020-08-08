@@ -111,9 +111,8 @@
 // Interrupts
 //
 // We have 32-bit 16 handlers. Each handler is the address of the handler
-// routine to jump to. The hardware saves the status register in r26 and the
-// next program counter in r27. It also swaps the current content of r29
-// with the value of status register 3. Finally, it clears UserMode, Interrupts,
+// routine to jump to. The hardware saves the status register, the next
+// program counter, and the stack pointer. Then, it clears UserMode, Interrupts,
 // and Paging, and transfers the control to the specified routine.
 //
 // Because the interrupt service routine runs with interrupts disabled, you
@@ -174,6 +173,7 @@ const (
 	// Extended operations
 	OpcodeWSR
 	OpcodeRSR
+	OpcodeIRET
 )
 
 const (
@@ -214,7 +214,7 @@ const (
 
 // The following constants define memory mapped addresses.
 const (
-	ClockFrequency = 1<<17 | iota
+	MMClockFrequency = 1<<17 | iota
 )
 
 // VM is a virtual machine instance. The virtual machine is not
@@ -222,6 +222,9 @@ const (
 type VM struct {
 	CF  uint32                     // clock frequency
 	GPR [NumRegisters]uint32       // general purpose registers
+	IPC uint32                     // saved program counter during interrupt
+	IS0 uint32                     // saved S[0] during interrupt
+	ISP uint32                     // saved GPR[29] during interrupt
 	LTR time.Time                  // last time record
 	M   [MemorySize]uint32         // memory
 	PC  uint32                     // program counter
@@ -271,7 +274,7 @@ func (vm *VM) Memory(off uint32, flags uint32) (*uint32, error) {
 	}
 	// Implement memory mapped I/O
 	switch off {
-	case ClockFrequency:
+	case MMClockFrequency:
 		return &vm.CF, nil
 	}
 	return &vm.M[off], nil
@@ -342,12 +345,12 @@ func (vm *VM) Interrupt(code uint32) error {
 	if code >= 16 {
 		code = IrqHALT // the zero handler tells the kernel to HALT
 	}
-	// save state and next PC - those registers are typically
-	// reserved for kernel operations in MIPS
-	vm.GPR[26] = vm.S[0]
-	vm.GPR[27] = vm.PC
-	// swap the kernel stack and the current user stack
-	vm.S[3], vm.GPR[29] = vm.GPR[29], vm.S[3]
+	// save state and switch to interrupt
+	vm.IS0 = vm.S[0]
+	vm.ISP = vm.GPR[29]
+	vm.IPC = vm.PC
+	// swap to kernel stack
+	vm.GPR[29] = vm.S[3]
 	// enter kernel mode with interrupt handling and paging disabled
 	vm.S[0] &^= StatusUserMode | StatusInterrupts | StatusPaging
 	// jump to ISR
@@ -445,6 +448,13 @@ func (vm *VM) Execute(ci uint32) error {
 		case OpcodeRSR:
 			vm.GPR[ra] = vm.S[imm22]
 		}
+	case OpcodeIRET:
+		if (vm.S[0] & StatusUserMode) != 0 {
+			return ErrNotPermitted
+		}
+		vm.S[0] = vm.IS0
+		vm.GPR[29] = vm.ISP
+		vm.PC = vm.IPC
 	}
 	// After the execution of each instruction, check whether we have
 	// any other pending interrupt and service them.
@@ -486,6 +496,8 @@ func Disassemble(ci uint32) string {
 		return fmt.Sprintf("wsr r%d %d", ra, imm22)
 	case OpcodeRSR:
 		return fmt.Sprintf("rsr r%d %d", ra, imm22)
+	case OpcodeIRET:
+		return fmt.Sprint("iret")
 	default:
 		return fmt.Sprintf("<unknown instruction: %d>", ci)
 	}

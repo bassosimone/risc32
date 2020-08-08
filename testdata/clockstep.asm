@@ -32,9 +32,7 @@ __forever:  movi r8 __forever
 
             .space 1234
 
-__irq1:     movi r29 __istack    # use interrupt stack
-                                 #
-            sw r8 r29 0          # push r8 (1/2)
+__irq1:     sw r8 r29 0          # push r8 (1/2)
             addi r29 r29 1       # push r8 (2/2)
                                  #
             rsr r8 0             #
@@ -44,6 +42,4 @@ __irq1:     movi r29 __istack    # use interrupt stack
             addi r29 r29 -1      # pop r8 (1/2)
             lw r8 r29 0          # pop r8 (2/2)
                                  #
-            rsr r29 3            # restore userspace stack
-            wsr r26 0            # reset state
-            jalr r0 r27          # return from interrupt
+            iret                 # we're done

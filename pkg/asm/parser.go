@@ -30,6 +30,7 @@ var InstructionParsers = map[string]ParseSpecificInstruction{
 	"wsr":    ParseWSR,
 	"rsr":    ParseRSR,
 	"trap":   ParseTRAP,
+	"iret":   ParseIRET,
 }
 
 // The following errors may occur when assembling.
@@ -471,6 +472,17 @@ func ParseTRAP(in <-chan LexerToken, label *string, lineno int) []Instruction {
 		Lineno:     lineno,
 		MaybeLabel: label,
 		Imm:        imm,
+	}}
+}
+
+// ParseIRET parses the IRET pseudo-instruction
+func ParseIRET(in <-chan LexerToken, label *string, lineno int) []Instruction {
+	if err := ParseEOL(in); err != nil {
+		return NewParseError(err)
+	}
+	return []Instruction{InstructionIRET{
+		Lineno:     lineno,
+		MaybeLabel: label,
 	}}
 }
 
